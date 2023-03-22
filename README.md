@@ -3,7 +3,8 @@
 
 ## `Repo Organization`
 
-Project was completed in `R` using `.Rmd` files. All code and written works have been redacted for privacy.
+All analysis was conducted in `R` using various statistical libraries such as `data.table`, `sandwich`, `tidyverse`, `lmtest`, and `stargazer`.
+. All code and written works have been redacted for privacy.
 
 * **`generate_messages`**: code to create daily reminder messages, which were fed into CRM messaging platform.
 
@@ -24,6 +25,3 @@ To measure the effect of text messages, we tracked customers days past due at ti
 We failed to detect a statistically significant effect of the treatment on the average days past due between treatment and control groups, even when controling for a variety of customer attributes and including fixed effects of day of the week.
 
 <img src="report/results.png" alt="exerpts"  style="display:block; margin-left:auto; margin-right: auto; width: 50%;">
-
-All analysis was conducted in R using various statistical libraries such as `data.table`, `sandwich`, `tidyverse`, `lmtest`, and `stargazer`.
-
