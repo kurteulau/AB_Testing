@@ -1,0 +1,207 @@
+---
+title: "Data Post Processing"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages, message=FALSE, warning=FALSE}
+library(data.table)
+library(readxl)
+library(dplyr)
+library(lubridate)
+```
+
+# Data post processing
+This notebook introduces the post processing plan for our analysis. 
+1. reading data
+2. merging data
+3. feature engineering
+(a) possible spillover
+(b) message language
+(c) upcoming reminder message date
+4. saving processed data file
+
+## Read data
+1. assigned - assignment to treatment and control - this data contains all of the units and covariates as they were assigned to treatment and control.
+2. covariates - account data - raw data from REDACTED that contains a variety of meta data
+3. accounts_potential_spillover - spillover units - these are units that share a lat and long per analysis
+4. message log
+```{r read data}
+assigned <- fread("../data/processed/assignment_to_treatment_and_control.csv")
+
+covariates <- fread("../data/raw/20220608_accounts.csv")
+
+covariates <- covariates[ , c('account_number','group_name','unlock_price',
+             'responsible_user','customer_gender','customer_age',
+             'customer_region','customer_occupation')]
+
+accounts_potential_spillover <- fread("../data/processed/accounts_with_shared_lat_long.csv")
+
+# extract accounts that have spillover to a vector
+accounts_potential_spillover <- accounts_potential_spillover[ , account_number]
+
+message_log <- fread("../data/processed/late_messages - Sheet1.csv")
+```
+
+```{r merge data}
+accounts <- merge(assigned[eligible_for_exp == 1, ], covariates, by = 'account_number')
+```
+
+```{r some light cleaning}
+# old index column that can be removed
+accounts[ , V1 := NULL]
+
+# re index alphabetic component
+accounts[ , avg_days_past_due_group := case_when(
+  avg_days_past_due_group == '(C) 1-7 days' ~ '(A) 1-7 days',
+  avg_days_past_due_group == '(D) 8-29 days' ~ '(B) 8-29 days',
+  avg_days_past_due_group == '(E) 30-59 days' ~ '(C) 30-59 days')]
+```
+
+```{r missing data}
+# create dummy variable for missing age
+accounts[ , missing_age := ifelse(is.na(customer_age), 1, 0)]
+
+# set missing age value to 0
+accounts[is.na(customer_age), customer_age := 0]
+
+# create dummy variable for missing occupation
+accounts[ , missing_occupation := ifelse(customer_occupation == "", 1, 0)]
+```
+
+## Feature engineering
+### Possible spillover
+```{r possible spillover}
+# create dummy variable if account / subject possibly exposed to spillover
+accounts[ , possible_spillover := (account_number %in% accounts_potential_spillover) * 1]
+
+accounts[ , table(possible_spillover)]
+```
+
+### Message language
+The message language is determined by the product purchased. Any unit with that has purchased the REDACTED product is sent a message in English. This is an expensive product and REDACTED assumes that anyone who purchases this product is wealthy, educated, and speaks English. If the unit is in the group REDACTED we denote the field "message_is_english" with a 1. 
+```{r message language}
+# create dummy if message sent is in English
+accounts[ , message_is_english := grepl("REDACTED", group_name) * 1]
+
+accounts[ , table(message_is_english)]
+```
+
+### Message timing
+```{r generate table of account numbers and date of upcoming payment reminder}
+upcoming_reminder_log <- data.table()
+
+path_name = "../data/message_jobs/"
+
+# vector of all upcoming payment reminder files
+upcoming_payment_reminder_files <- list.files(path = path_name, pattern = 'upcoming')
+
+start_date <- as.Date("20220617", format = "%Y%m%d")
+end_date <- as.Date("20220717", format = "%Y%m%d")
+
+for (i in 1:length(upcoming_payment_reminder_files)) {
+  file_path <- paste(path_name, upcoming_payment_reminder_files[i], sep = "")
+  
+  date <- as.Date(substr(upcoming_payment_reminder_files[i], 1, 8), format = "%Y%m%d")
+  
+  # only aggregate accounts with message dates within experiment timeframe
+  if (date >= start_date & date <= end_date) {
+    temp_d <- data.table(read_excel(file_path))
+    
+    setnames(x = temp_d, old = "Account Number", new = "account_number")
+    
+    temp_d[ , account_number := as.integer(gsub(pattern = "'", replacement = "", x = account_number))]
+    temp_d[ , upcoming_payment_reminder_date := date]
+    
+    upcoming_reminder_log <- rbind(upcoming_reminder_log, temp_d)
+  }
+}
+```
+
+```{r generate if account received multiple upcoming payment reminders}
+upcoming_payment_reminder_counts <- data.table(
+  upcoming_reminder_log %>%
+    group_by(account_number) %>%
+      tally(sort = TRUE))
+
+setnames(x = upcoming_payment_reminder_counts, old = "n", new = "number_upcoming_messages")
+
+accounts <- merge(x = accounts, y = upcoming_payment_reminder_counts,
+                  by = 'account_number', all.x = TRUE)
+
+accounts[is.na(number_upcoming_messages), number_upcoming_messages := 0]
+
+# create dummy if account has received multiple upcoming messages
+accounts[ , multiple_upcoming_messages_in_exp := (number_upcoming_messages > 1) * 1]
+
+accounts[ , table(treat, multiple_upcoming_messages_in_exp)]
+```
+
+```{r generate if account has been administered experiment through message}
+accounts[ , administered := (number_upcoming_messages > 0) * 1]
+
+accounts[ , table(treat, administered)]
+```
+
+```{r generate day of week of first upcoming payment reminder}
+first_upcoming_date_by_account <-
+  upcoming_reminder_log[ , .(first_upcoming_date = min(upcoming_payment_reminder_date)),
+           by = account_number]
+
+first_upcoming_date_by_account[ , first_upcoming_char_date := wday(first_upcoming_date,
+                                                                   label = TRUE)]
+
+accounts <- merge(x = accounts, y = first_upcoming_date_by_account,
+                  by = 'account_number', all.x = TRUE)
+
+accounts[ , table(treat, first_upcoming_char_date)]
+```
+
+```{r clean message log table to see if messages delivered late in CAT}
+# convert schedule date to proper format and then create column for CAT
+message_log[ , datetime_sched_pt := paste(gsub(pattern = "/", replacement = "-",
+                                         x = datetime_sched_pt))]
+message_log[ , datetime_sched_pt := as.POSIXct(datetime_sched_pt,
+                                               format = "%m-%d-%Y %T")]
+message_log[ , datetime_sched_cat := datetime_sched_pt + hours(9)]
+
+# convert delivery date to proper format and then create column for CAT
+message_log[ , datetime_deliver_pt := paste(gsub(pattern = "/", replacement = "-",
+                                         x = datetime_deliver_pt))]
+message_log[ , datetime_deliver_pt := as.POSIXct(datetime_deliver_pt,
+                                               format = "%m-%d-%Y %T")]
+message_log[ , datetime_deliver_cat := datetime_deliver_pt + hours(9)]
+
+# reduce columns to key ones
+message_log <- message_log[ , c("date_sched","datetime_sched_cat",
+                                "datetime_deliver_cat")]
+
+message_log[ , delivered_late := ifelse(as.Date(datetime_sched_cat) == as.Date(datetime_deliver_cat), 0, 1)]
+```
+
+```{r generate if first upcoming message reminder late or not}
+# static vector of days when scheduled messages delivered late
+late_days <- message_log[delivered_late == 1, date_sched]
+
+accounts[ , first_upcoming_message_late := ifelse(first_upcoming_date %in% late_days, 1, 0)]
+
+accounts[ , table(treat, first_upcoming_message_late)]
+```
+
+```{r generate if any upcoming message reminder late or not}
+accounts_with_any_late_message <- 
+  upcoming_reminder_log[upcoming_payment_reminder_date %in% late_days, account_number]
+
+accounts[ , any_upcoming_message_late := ifelse(account_number %in% accounts_with_any_late_message, 1, 0)]
+
+accounts[ , table(treat, any_upcoming_message_late)]
+```
+
+```{r create static file to use}
+write.csv(x = accounts,
+          file = "../data/processed/accounts_with_post_processing.csv",
+          row.names = FALSE)
+```
+

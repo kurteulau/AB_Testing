@@ -1,0 +1,121 @@
+---
+title: "Covariate Balance Check"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(digits = 3)
+```
+
+```{r load packages, message=FALSE, warning=FALSE}
+library(data.table)
+install.packages('lmtest')
+library(lmtest)
+install.packages('sandwich')
+library(sandwich)
+```
+
+```{r load data}
+assigned <- fread("../data/processed/assignment_to_treatment_and_control.csv")
+covariates <- fread("../data/raw/20220608_accounts.csv")
+```
+
+```{r merge data tables and clean results}
+covariates <- covariates[ , c('account_number','group_name','unlock_price',
+             'responsible_user','customer_gender','customer_age',
+             'customer_region','customer_occupation')]
+
+accounts <- merge(assigned[eligible_for_exp == 1, ], covariates,
+                  by = 'account_number')
+
+# check for columns with null values
+colSums(is.na(accounts))
+
+# check for columns with empty strings
+col_names = colnames(accounts)
+
+for (i in 1:length(col_names)) {
+  try(
+    if (accounts[get(col_names[i]) == "" , .N] != 0) {
+      print(paste(col_names[i],"has values with empty strings"))
+    }
+  )
+}
+
+accounts[ , missing_age := ifelse(is.na(customer_age), 1, 0)]
+accounts[is.na(customer_age), customer_age := 0]
+
+accounts[ , missing_occupation := ifelse(customer_occupation == "", 1, 0)]
+```
+
+```{r feature creation}
+accounts[ , message_is_english := grepl("REDACTED", group_name) * 1]
+```
+
+
+```{r conduct covariate balance check - robust s.e.}
+model_1 <- accounts[ , lm(treat ~ 1)]
+
+model_2 <- accounts[ , lm(treat ~ unlock_price + customer_gender + customer_age +
+                            missing_age + message_is_english)]
+
+waldtest(model_1, model_2, test = 'F', vcov = vcovHC)
+```
+
+```{r conduct covariate balance check - classical s.e.}
+model_1 <- accounts[ , lm(treat ~ 1)]
+
+model_2 <- accounts[ , lm(treat ~ group_name + unlock_price + responsible_user +
+                            customer_gender + customer_age + missing_age +
+                            customer_region + customer_occupation +
+                            missing_occupation + message_is_english)]
+
+anova(model_1, model_2, test = 'F')
+```
+
+```{r examine differences by group}
+### unlock price
+avg_unlock_price <- accounts[ , .(avg_unlock_price = mean(unlock_price)), by=treat]
+avg_unlock_price_se <- accounts[ , t.test(unlock_price ~ treat)]$stderr
+
+### customer gender
+prop_male <- accounts[ , .(prop_male = mean((customer_gender == "MALE") * 1)), by=treat]
+prop_male_se <- accounts[ , t.test((customer_gender == "MALE") * 1 ~ treat)]$stderr
+
+prop_female <- accounts[ , .(prop_female = mean((customer_gender == "FEMALE") * 1)), by=treat]
+prop_female_se <- accounts[ , t.test((customer_gender == "FEMALE") * 1 ~ treat)]$stderr
+
+### customer age
+avg_cust_age <- accounts[!is.na(customer_age), .(avg_age = mean(customer_age)), by=treat]
+avg_cust_age_se <- accounts[!is.na(customer_age), t.test(customer_age ~ treat)]$stderr
+
+### missing age
+prop_missing_age <- accounts[ , .(prop_missing_age = mean(is.na(customer_age))), by=treat]
+prop_missing_age_se <- accounts[ , t.test(is.na(customer_age) ~ treat)]$stderr
+
+### message is English
+prop_message_eng <- accounts[ , .(prop_message_eng = mean(message_is_english)), by=treat]
+prop_message_eng_se <- accounts[ , t.test(message_is_english ~ treat)]$stderr
+```
+
+\begin{center}
+Average Customer Characteristics, Pre-Treatment
+
+\begin{tabular}{ c | c | c | c }
+Characteristic & Control & Treatment & Difference \\
+
+\hline
+Unlock price & `r avg_unlock_price[treat == 0, avg_unlock_price]` & `r avg_unlock_price[treat == 1, avg_unlock_price]` & `r avg_unlock_price[ , diff(avg_unlock_price)]` \\
+ & & & (`r avg_unlock_price_se`) \\
+Male & `r prop_male[treat == 0, prop_male]` & `r prop_male[treat == 1, prop_male]` & `r prop_male[ , diff(prop_male)]` \\
+ & & & (`r prop_male_se`) \\
+Female & `r prop_female[treat == 0, prop_female]` & `r prop_female[treat == 1, prop_female]` & `r prop_female[ , diff(prop_female)]` \\
+ & & & (`r prop_female_se`) \\
+Age & `r avg_cust_age[treat == 0, avg_age]` & `r avg_cust_age[treat == 1, avg_age]` & `r avg_cust_age[ , diff(avg_age)]` \\
+ & & & (`r avg_cust_age_se`) \\
+English message  & `r prop_message_eng[treat == 0, prop_message_eng]` & `r prop_message_eng[treat == 1, prop_message_eng]` & `r prop_message_eng[ , diff(prop_message_eng)]` \\
+ & & & (`r prop_message_eng_se`) \\
+
+\end{tabular}
+
+\end{center}

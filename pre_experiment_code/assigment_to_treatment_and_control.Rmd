@@ -1,0 +1,60 @@
+---
+title: "Assignment to Treatment and Control"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages, message=FALSE, warning=FALSE}
+library(data.table)
+library(tidyverse)
+```
+
+```{r load data}
+accounts <- fread("data/processed/active_accts_days_past_due_CSO_dummy_phone.csv")
+```
+
+```{r annotate the data based on population of interest}
+accounts[, ':='(
+  pay_date = as.Date(date_of_disablement_utc),
+  six_months_avg_days_past_due = ceiling(six_months_avg_days_past_due)
+)]
+
+accounts[, avg_days_past_due_group := case_when(
+  six_months_avg_days_past_due < 0 ~ "(A) < 0 days",
+  six_months_avg_days_past_due == 0 ~ "(B) 0 days",
+  six_months_avg_days_past_due > 0 & six_months_avg_days_past_due <= 7 ~ "(C) 1-7 days",
+  six_months_avg_days_past_due > 7 & six_months_avg_days_past_due <= 29 ~ "(D) 8-29 days",
+  six_months_avg_days_past_due > 29 & six_months_avg_days_past_due <= 59 ~ "(E) 30-59 days",
+  six_months_avg_days_past_due > 59 ~ "(F) > 59 days"
+)]
+
+accounts <- accounts[ , eligible_for_exp := ifelse(
+  pay_date >= as.Date("2022-06-17") & pay_date <= as.Date("2022-07-17") &
+    !(avg_days_past_due_group %in% 
+                         c("(A) < 0 days","(B) 0 days","(F) > 59 days")), 1, 0)]
+```
+
+```{r assign to treatment and control}
+blocks <- sort(unique(accounts[, avg_days_past_due_group]))
+
+for (i in 1:length(blocks)) {
+  accounts[eligible_for_exp == 1 & avg_days_past_due_group == blocks[i],
+        treat := sample(c(rep(c(0,1), each = .N%/%2),
+                          sample(c(0,1), size = .N - (.N%/%2)*2)))]
+}
+
+accounts[eligible_for_exp == 0, treat := 0]
+
+accounts[eligible_for_exp == 1, table(avg_days_past_due_group, treat)]
+```
+
+```{r construct output csv}
+accounts <- accounts[, c('account_number','date_of_disablement_utc','thirty_day_price',
+             'avg_days_past_due_group','eligible_for_exp','treat')]
+
+write.csv(x = accounts, file = "data/processed/assignment_to_treatment_and_control.csv")
+```
+

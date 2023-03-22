@@ -1,0 +1,316 @@
+---
+title: "Models to Measure Treatment Effect"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(digits = 3)
+```
+
+```{r load packages, message=FALSE, warning=FALSE}
+library(data.table)
+library(dplyr)
+install.packages('sandwich')
+library(sandwich)
+install.packages('lmtest')
+library(lmtest)
+install.packages('stargazer')
+library(stargazer)=
+library(ggplot2)
+```
+
+```{r load custom functions}
+get_robust_se <- function(model) {
+  require(sandwich)
+  sqrt(diag(sandwich::vcovHC(model)))
+}
+```
+
+Models:
+1. Treatment and blocks
+2. + covariates
+3. + fixed effects for day of week / week number
+4. + HTE for spillover exposure
+5. + HTE if account present multiple times
+6. + HTE for sent on time or late (first OR any upcoming)
+
+## Combine datasets
+We will combine the data sets containing outcomes and assignment covariates together. The shared key for the data tables is the account number column which is the unique identifier for each unit.
+
+1. outcomes - dummy outcome data - this data set contains the fabricated outcomes. The fabricated outcomes were generated from a poisson distribution of days past due for each unit. We used fabricated data while we wait for the experiment to conclude.
+
+```{r merge data tables}
+accounts <- fread("../data/processed/accounts_with_post_processing.csv")
+
+outcomes <- fread("../data/processed/avg_outcomes.csv")
+outcomes[ , V1 := NULL]
+
+d <- merge(x = accounts, y = outcomes, by = c('account_number'), all.x = TRUE)
+```
+
+```{r generate columns for attrition and outcome of interest}
+d[ , attrited := is.na(avg_days_past_due_exp) * 1]
+
+d[ , days_past_due_at_exp_end := ifelse(attrited == 1, 
+                                        as.Date("2022-07-17") - as.Date(first_upcoming_date),
+                                        avg_days_past_due_exp)]
+
+d[!is.na(days_past_due_at_exp_end), .(avg_days_past_due_exp_end = mean(as.integer(days_past_due_at_exp_end))), by = attrited]
+
+setnames(x = d, old = "avg_days_past_due_exp", new = "Y")
+```
+
+## Analysis and modeling
+```{r examine if there's a possible difference in take up rate}
+itt_d_model <- d[ , lm(administered ~ treat + avg_days_past_due_group)]
+
+stargazer(
+  itt_d_model,
+  type = 'text',
+  dep.var.labels = c("Experiment administered"),
+  covariate.labels = c("Intercept","Treatment","Avg. days past due: 8-29 days",
+                       "Avg. days past due: 30-59 days"),
+  se = list(get_robust_se(itt_d_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+```
+
+```{r examine if there's differential attrition}
+differential_attrition_model <- d[ , lm(attrited ~ treat + avg_days_past_due_group)]
+
+stargazer(
+  differential_attrition_model,
+  type = 'text',
+  dep.var.labels = c("Outcome observed"),
+  covariate.labels = c("Intercept","Treatment","Avg. days past due: 8-29 days",
+                       "Avg. days past due: 30-59 days"),
+  se = list(get_robust_se(differential_attrition_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+```
+
+```{r simple average comparison by block and treatment group}
+d[administered == 1 & attrited == 0,
+  .(avg_days_past_due = mean(Y)), by=.(avg_days_past_due_group, treat)][order(avg_days_past_due_group, treat)]
+```
+
+```{r histogram plot of outcome by treatment group}
+d[administered == 1 & attrited == 0, ] %>%
+  ggplot() +
+  aes(x = Y) +
+  geom_histogram(binwidth = 1) +
+  facet_wrap('treat', dir = 'v')
+```
+
+```{r histogram plot of individual collection rate by treatment group}
+d[administered == 1 & attrited == 0, ] %>%
+  ggplot() +
+  aes(x = ind_collect_rate) +
+  geom_histogram(binwidth = 0.25) +
+  facet_wrap('treat', dir = 'v')
+```
+
+```{r examine if there's a difference in the collection rate}
+check <- d[administered == 1 & attrited == 0,
+                                    lm(Y ~ treat + avg_days_past_due_group +
+                                            ind_collect_rate + number_upcoming_messages)]
+
+stargazer(
+  check,
+  type = 'text',
+  dep.var.labels = c("Individual collection rate"),
+  # covariate.labels = c("Intercept","Treatment","Avg. days past due: 8-29 days",
+  #                      "Avg. days past due: 30-59 days"),
+  se = list(get_robust_se(check)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+```
+
+1. CACE with treat and block
+```{r CACE}
+cace_model <- d[administered == 1 & attrited == 0,
+                lm(Y ~ treat + avg_days_past_due_group)]
+
+stargazer(
+  cace_model,
+  type = 'text',
+  dep.var.labels = c("Avg. days past due"),
+  covariate.labels = c("Intercept","Treatment","Avg. days past due: 8-29 days",
+                       "Avg. days past due: 30-59 days"),
+  se = list(get_robust_se(cace_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+```
+
+```{r examine if there's a difference in the collection rate}
+ind_collection_rate_paid_model <- d[ , lm(ind_collect_rate ~ treat + 
+                                            avg_days_past_due_group)]
+
+stargazer(
+  ind_collection_rate_paid_model,
+  type = 'text',
+  dep.var.labels = c("Individual collection rate"),
+  covariate.labels = c("Intercept","Treatment","Avg. days past due: 8-29 days",
+                       "Avg. days past due: 30-59 days"),
+  se = list(get_robust_se(ind_collection_rate_paid_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+```
+
+2. + fixed effects for day of week
+```{r CACE}
+fixed_effects_model <- d[administered == 1 & attrited == 0,
+                         lm(Y ~ treat + avg_days_past_due_group + 
+                              first_upcoming_char_date)]
+
+stargazer(
+  cace_model, fixed_effects_model,
+  type = 'text',
+  dep.var.labels = c("Avg. days past due"),
+  covariate.labels = c("Intercept","Treatment","Avg. days past due: 8-29 days",
+                       "Avg. days past due: 30-59 days"),
+  add.lines = list(c('Daily fixed effects', 'No','Yes')),
+  se = list(get_robust_se(cace_model), get_robust_se(fixed_effects_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit = 'first_upcoming_char_date',
+  omit.stat = 'F'
+)
+
+waldtest(cace_model, fixed_effects_model, vcov = vcovHC, test = 'F')
+```
+
+3. + covariates
+```{r CACE}
+# any more covariates and we can't report robust s.e. because the matrix is uninvertible
+covariates_model <- d[administered == 1 & attrited == 0,
+                      lm(Y ~ treat + avg_days_past_due_group + unlock_price + 
+                           customer_gender + customer_age + missing_age + message_is_english)]
+
+stargazer(
+  cace_model, covariates_model,
+  type = 'text',
+  dep.var.labels = c("Avg. days past due"),
+  covariate.labels = c("Intercept","Treatment","Avg. days past due: 8-29 days",
+                       "Avg. days past due: 30-59 days","Unlock price","Male",
+                       "Customer age","Missing age","Message in English"),
+  se = list(get_robust_se(cace_model), get_robust_se(covariates_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+
+waldtest(cace_model, covariates_model, vcov = vcovHC, test = 'F')
+```
+
+4. + dummies for known issues that have been modeled
+```{r model for spillover}
+spillover_model <- d[administered == 1 & attrited == 0,
+                     lm(Y ~ treat * possible_spillover + avg_days_past_due_group)]
+
+stargazer(
+  cace_model, spillover_model,
+  type = 'text',
+  dep.var.labels = c("Avg. days past due"),
+  covariate.labels = c("Intercept","Treatment","Possible spillover",
+                       "Avg. days past due: 8-29 days",
+                       "Avg. days past due: 30-59 days",
+                       "Treament x Possible spillover"),
+  se = list(get_robust_se(cace_model), get_robust_se(spillover_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+```
+
+```{r model for first upcoming message being late}
+first_message_late_model <- d[administered == 1 & attrited == 0,
+                              lm(Y ~ treat * first_upcoming_message_late +
+                                              avg_days_past_due_group)]
+
+stargazer(
+  cace_model, first_message_late_model,
+  type = 'text',
+  dep.var.labels = c("Avg. days past due"),
+  covariate.labels = c("Intercept","Treatment","First upcoming message sent late",
+                       "Avg. days past due: 8-29 days",
+                       "Avg. days past due: 30-59 days",
+                       "Treatment x First upcoming message sent late"),
+  se = list(get_robust_se(cace_model), get_robust_se(first_message_late_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+```
+
+```{r model for any upcoming message being late}
+any_message_late_model <- d[administered == 1 & attrited == 0,
+                            lm(Y ~ treat * any_upcoming_message_late +
+                                              avg_days_past_due_group)]
+
+stargazer(
+  cace_model, any_message_late_model,
+  type = 'text',
+  dep.var.labels = c("Avg. days past due"),
+  covariate.labels = c("Intercept","Treatment","Any upcoming message sent late",
+                       "Avg. days past due: 8-29 days",
+                       "Avg. days past due: 30-59 days",
+                       "Treatment x Any upcoming message sent late"),
+  se = list(get_robust_se(cace_model), get_robust_se(any_message_late_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+```
+
+```{r model for receiving multiple messages}
+multiple_messages_model <- d[administered == 1 & attrited == 0,
+                             lm(Y ~ treat * multiple_upcoming_messages_in_exp +
+                                  number_upcoming_messages + avg_days_past_due_group)]
+
+stargazer(
+  cace_model, multiple_messages_model,
+  type = 'text',
+  dep.var.labels = c("Avg. days past due"),
+  covariate.labels = c("Intercept","Treatment","Received multiple upcoming messages",
+                       "Number of upcoming messages received",
+                       "Avg. days past due: 8-29 days",
+                       "Avg. days past due: 30-59 days",
+                       "Treatment x Received multiple upcoming messages"),
+  se = list(get_robust_se(cace_model), get_robust_se(multiple_messages_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+```
+
+```{r full table}
+stargazer(
+  cace_model, spillover_model, first_message_late_model, any_message_late_model,
+  multiple_messages_model,
+  type = 'text',
+  dep.var.labels = c("Avg. days past due"),
+  # covariate.labels = c("Intercept","Treatment","Possible spillover",
+  #                      "Avg. days past due: 8-29 days",
+  #                      "Avg. days past due: 30-59 days",
+  #                      "Treament x Possible spillover"),
+  se = list(get_robust_se(cace_model), get_robust_se(spillover_model),
+            get_robust_se(first_message_late_model),
+            get_robust_se(any_message_late_model),
+            get_robust_se(multiple_messages_model)),
+  intercept.top = TRUE,
+  intercept.bottom = FALSE,
+  omit.stat = 'F'
+)
+```
+

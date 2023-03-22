@@ -1,0 +1,78 @@
+---
+title: "Pre Experiment EDA"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load data}
+library(data.table)
+library(lubridate)
+accounts <- fread("data/raw/20220605_accounts.csv",sep=",")
+payments <- fread("data/raw/20220605_payments.csv",sep=",")
+```
+
+```{r prep account data}
+accounts[, registration_date_utc := as.POSIXct(x = registration_date_utc, 
+                                                tz = "GMT",
+                                                format = "%m/%d/%y %H:%M")]
+
+accounts_reduced <- accounts[, .(account_number, registration_date_utc, upfront_price,
+                                 upfront_days_included, unlock_price, hour_price,
+                                 nominal_term, registering_user,
+                                 REDACTED)][order(registration_date_utc)]
+
+accounts_reduced <- na.omit(accounts_reduced, cols="account_number")
+```
+
+```{r prep payments data}
+payments[, effective_utc := as.POSIXct(x = effective_utc, tz = "GMT",
+                                       format = "%m/%d/%y %H:%M")]
+
+payments_reduced <- payments[, .(account_number, effective_utc,
+                                 amount)][order(effective_utc)]
+
+payments_reduced <- na.omit(payments_reduced, cols="account_number")
+```
+
+```{r merge tables to calc days past due}
+accounts_with_payments <- merge(x = accounts_reduced, y = payments_reduced,
+                                by = "account_number", all = FALSE)
+
+accounts_with_payments[, percent_paid_off := cumsum(amount) / unlock_price,
+                       by = account_number]
+
+accounts_with_payments[, next_exp_pay_date := as.Date(effective_utc) %m+% months(1)]
+
+accounts_with_payments[, days_past_due := 
+                         difftime(as.Date(effective_utc),
+                                  as.Date(shift(next_exp_pay_date, fill = NA)),
+                                  units = "days"), by = account_number]
+
+accounts_with_payments[, days_bt_payments := 
+                         difftime(as.Date(effective_utc),
+                                  as.Date(shift(effective_utc, fill = first(effective_utc))),
+                                  units = "days"), by = account_number]
+
+accounts_with_payments[account_number == REDACTED, .(account_number,
+                                                    registration_date_utc,
+                                                    effective_utc, amount,
+                                                    days_past_due,
+                                                    days_bt_payments,
+                                                    next_exp_pay_date)]
+```
+
+```{r eda}
+accounts_with_payments[unlock_price == amount, uniqueN(account_number)]
+
+accounts_with_payments[, uniqueN(account_number)]
+
+accounts_with_payments[unlock_price == amount, sum(registration_date_utc==effective_utc)]
+
+accounts_with_payments[unlock_price == amount &
+                         difftime(registration_date_utc,effective_utc,"days") == 0,
+                       uniqueN(account_number)]
+```
+
+
