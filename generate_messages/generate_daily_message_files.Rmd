@@ -1,0 +1,239 @@
+---
+title: "Generate Daily Message Files"
+author: "Max Eagle"
+date: '2022-06-14'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages, message=FALSE, warning=FALSE}
+library(data.table)
+library(tidyverse)
+library(stringr)
+install.packages("xlsx")
+library(xlsx)
+
+WRITE_SENT_MSG_TO_FILE <- TRUE
+```
+
+```{r load data}
+date <- format(Sys.Date(), "%Y%m%d")
+upcoming <- paste(date, "accounts_upcoming.csv", sep="_")
+late_1 <- paste(date, "accounts_late_1.csv", sep="_")
+late_7 <- paste(date, "accounts_late_7.csv", sep="_")
+late_14 <- paste(date, "accounts_late_14.csv", sep="_")
+late_21<- paste(date, "accounts_late_21.csv", sep="_")
+late_28 <- paste(date, "accounts_late_28.csv", sep="_")
+
+accounts_upcoming <- fread(paste("data/raw/", upcoming, sep = ""))
+accounts_late_1 <- fread(paste("data/raw/", late_1, sep = ""))
+accounts_late_7 <- fread(paste("data/raw/", late_7, sep = ""))
+accounts_late_14 <- fread(paste("data/raw/", late_14, sep = ""))
+accounts_late_21 <- fread(paste("data/raw/", late_21, sep = ""))
+accounts_late_28 <- fread(paste("data/raw/", late_28, sep = ""))
+
+assigned <- fread("data/processed/assignment_to_treatment_and_control.csv")
+```
+
+```{r filter data and store count}
+# Drop all accounts in the Civils pricing groups as per Edward's instructions
+accounts_upcoming <- accounts_upcoming[ !grepl("Civils", group_name),  ]
+accounts_late_1 <- accounts_late_1[ !grepl("Civils", group_name), ]
+accounts_late_7 <- accounts_late_7[ !grepl("Civils", group_name), ]
+accounts_late_14 <- accounts_late_14[ !grepl("Civils", group_name), ]
+accounts_late_21 <- accounts_late_21[ !grepl("Civils", group_name), ]
+accounts_late_28 <- accounts_late_28[ !grepl("Civils", group_name), ]
+
+n_messages_at_start <- accounts_upcoming[ , .N] + accounts_late_1[ , .N] +
+              accounts_late_7[ , .N] + accounts_late_14[ , .N] +
+              accounts_late_21[ , .N] + accounts_late_28[ , .N]
+```
+
+```{r generate data tables for message groups to send}
+# left join accounts with assigned
+accounts_upcoming_merge <- merge(x = accounts_upcoming, y = assigned,
+                                 by = 'account_number', all.x = TRUE)
+# if any records not in assigned, set treat = 0 (i.e., put in control)
+accounts_upcoming_merge[is.na(treat), treat := 0]
+
+# generate six data tables - one for control and two for treatment for each language
+accounts_upcoming_control_ch <- (accounts_upcoming_merge[treat == 0 &
+                              !grepl("Macheza 32", group_name), account_number])
+accounts_upcoming_treat_1_ch <- accounts_upcoming_merge[treat == 1 &
+                              !grepl("Macheza 32", group_name), account_number]
+
+accounts_upcoming_control_en <- accounts_upcoming_merge[treat == 0 &
+                              grepl("Macheza 32", group_name), account_number]
+accounts_upcoming_treat_1_en <- accounts_upcoming_merge[treat == 1 &
+                              grepl("Macheza 32", group_name), account_number]
+
+# repeat with accounts_late_1
+accounts_late_1_merge <- merge(x = accounts_late_1, y = assigned,
+                                 by = 'account_number', all.x = TRUE)
+accounts_late_1_merge[is.na(treat), treat := 0]
+
+accounts_late_1_control_ch <- accounts_late_1_merge[treat == 0 &
+                              !grepl("Macheza 32", group_name), account_number]
+accounts_late_1_treat_1_ch <- accounts_late_1_merge[treat == 1 &
+                              !grepl("Macheza 32", group_name), account_number]
+
+accounts_late_1_control_en <- accounts_late_1_merge[treat == 0 &
+                              grepl("Macheza 32", group_name), account_number]
+accounts_late_1_treat_1_en <- accounts_late_1_merge[treat == 1 &
+                              grepl("Macheza 32", group_name), account_number]
+
+# repeat with accounts_late_7
+accounts_late_7_merge <- merge(x = accounts_late_7, y = assigned,
+                                 by = 'account_number', all.x = TRUE)
+accounts_late_7_merge[is.na(treat), treat := 0]
+
+accounts_late_7_control_ch <- accounts_late_7_merge[treat == 0 &
+                              !grepl("Macheza 32", group_name), account_number]
+accounts_late_7_treat_1_ch <- accounts_late_7_merge[treat == 1 &
+                              !grepl("Macheza 32", group_name), account_number]
+
+accounts_late_7_control_en <- accounts_late_7_merge[treat == 0 &
+                              grepl("Macheza 32", group_name), account_number]
+accounts_late_7_treat_1_en <- accounts_late_7_merge[treat == 1 &
+                              grepl("Macheza 32", group_name), account_number]
+
+# repeat with accounts_late_14
+accounts_late_14_merge <- merge(x = accounts_late_14, y = assigned,
+                                 by = 'account_number', all.x = TRUE)
+accounts_late_14_merge[is.na(treat), treat := 0]
+
+accounts_late_14_control_ch <- accounts_late_14_merge[treat == 0 &
+                              !grepl("Macheza 32", group_name), account_number]
+accounts_late_14_treat_1_ch <- accounts_late_14_merge[treat == 1 &
+                              !grepl("Macheza 32", group_name), account_number]
+
+accounts_late_14_control_en <- accounts_late_14_merge[treat == 0 &
+                              grepl("Macheza 32", group_name), account_number]
+accounts_late_14_treat_1_en <- accounts_late_14_merge[treat == 1 &
+                              grepl("Macheza 32", group_name), account_number]
+
+# repeat with accounts_late_21
+accounts_late_21_merge <- merge(x = accounts_late_21, y = assigned,
+                                 by = 'account_number', all.x = TRUE)
+accounts_late_21_merge[is.na(treat), treat := 0]
+
+accounts_late_21_control_ch <- accounts_late_21_merge[treat == 0 &
+                              !grepl("Macheza 32", group_name), account_number]
+accounts_late_21_treat_1_ch <- accounts_late_21_merge[treat == 1 &
+                              !grepl("Macheza 32", group_name), account_number]
+
+accounts_late_21_control_en <- accounts_late_21_merge[treat == 0 &
+                              grepl("Macheza 32", group_name), account_number]
+accounts_late_21_treat_1_en <- accounts_late_21_merge[treat == 1 &
+                              grepl("Macheza 32", group_name), account_number]
+
+# repeat with accounts_late_28
+accounts_late_28_merge <- merge(x = accounts_late_28, y = assigned,
+                                 by = 'account_number', all.x = TRUE)
+accounts_late_28_merge[is.na(treat), treat := 0]
+
+accounts_late_28_control_ch <- accounts_late_28_merge[treat == 0 &
+                              !grepl("Macheza 32", group_name), account_number]
+accounts_late_28_treat_1_ch <- accounts_late_28_merge[treat == 1 &
+                              !grepl("Macheza 32", group_name), account_number]
+
+accounts_late_28_control_en <- accounts_late_28_merge[treat == 0 &
+                              grepl("Macheza 32", group_name), account_number]
+accounts_late_28_treat_1_en <- accounts_late_28_merge[treat == 1 &
+                              grepl("Macheza 32", group_name), account_number]
+
+# Aggregate account numbers for accounts who need late payment reminders
+accounts_late_control_ch <- c(accounts_late_1_control_ch,
+                              accounts_late_7_control_ch,
+                              accounts_late_14_control_ch,
+                              accounts_late_21_control_ch,
+                              accounts_late_28_control_ch)
+
+accounts_late_treat_1_ch <- c(accounts_late_1_treat_1_ch,
+                              accounts_late_7_treat_1_ch,
+                              accounts_late_14_treat_1_ch,
+                              accounts_late_21_treat_1_ch,
+                              accounts_late_28_treat_1_ch)
+
+accounts_late_control_en <- c(accounts_late_1_control_en,
+                              accounts_late_7_control_en,
+                              accounts_late_14_control_en,
+                              accounts_late_21_control_en,
+                              accounts_late_28_control_en)
+
+accounts_late_treat_1_en <- c(accounts_late_1_treat_1_en,
+                              accounts_late_7_treat_1_en,
+                              accounts_late_14_treat_1_en,
+                              accounts_late_21_treat_1_en,
+                              accounts_late_28_treat_1_en)
+
+output_vectors <- list(accounts_upcoming_control_ch, accounts_upcoming_treat_1_ch,
+                       accounts_upcoming_control_en, accounts_upcoming_treat_1_en,
+                       accounts_late_control_ch, accounts_late_treat_1_ch,
+                       accounts_late_control_en, accounts_late_treat_1_en)
+```
+
+```{r prepend apostrophe to each account number}
+output_vectors_char <- vector(mode='list', length=8)
+for (i in 1:length(output_vectors_char)) {
+  if (length(output_vectors[[i]]) > 0) {
+    output_vectors_char[[i]] = paste("'", as.character(output_vectors[[i]]), sep="")
+  }
+}
+```
+
+```{r book keeping to track number of messages sent}
+n_messages <- 0
+for (vector in output_vectors) {
+    n_messages <- n_messages + length(vector)
+}
+
+# kill notebook if number of messages differs
+if (n_messages_at_start != n_messages) {
+  quit(save = "ask")
+}
+
+daily_cost <- n_messages * 0.0002
+
+row <- data.frame(Sys.Date(), n_messages, daily_cost)
+
+if (WRITE_SENT_MSG_TO_FILE) {
+  write.table(x = row, file = 'experiment_work/sent_messages.csv', append = TRUE, sep = ',',
+              row.names = FALSE, col.names = FALSE) }
+```
+
+```{r generate file paths}
+upcoming_control_ch <- paste(date, "accounts_upcoming_control_ch.xlsx", sep="_")
+upcoming_treat_1_ch <- paste(date, "accounts_upcoming_treat_1_ch.xlsx", sep="_")
+
+upcoming_control_en <- paste(date, "accounts_upcoming_control_en.xlsx", sep="_")
+upcoming_treat_1_en <- paste(date, "accounts_upcoming_treat_1_en.xlsx", sep="_")
+
+late_control_ch <- paste(date, "accounts_late_control_ch.xlsx", sep="_")
+late_treat_1_ch <- paste(date, "accounts_late_treat_1_ch.xlsx", sep="_")
+
+late_control_en <- paste(date, "accounts_late_control_en.xlsx", sep="_")
+late_treat_1_en <- paste(date, "accounts_late_treat_1_en.xlsx", sep="_")
+
+output_file_paths <- list(upcoming_control_ch, upcoming_treat_1_ch,
+                          upcoming_control_en, upcoming_treat_1_en,
+                          late_control_ch, late_treat_1_ch,
+                          late_control_en, late_treat_1_en)
+```
+
+```{r generate csv files}
+for (i in 1:length(output_file_paths)) {
+  if (length(output_vectors_char[[i]]) != 0) {
+    write.xlsx2(x = data.frame('Account Number' = output_vectors_char[[i]],
+                               check.names = FALSE),
+              file = paste("data/message_jobs/", output_file_paths[[i]], sep = ""),
+              sheetName = "Data for Upload",
+              row.names = FALSE,
+              col.names = TRUE)
+  }
+}
+```
+
